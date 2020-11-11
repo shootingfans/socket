@@ -3,6 +3,8 @@
 一个方便快捷的操作 `socket` 连接的包,使用多个协程来分别处理读取、处理以及写入的工作流程。
 
 [![Build Status](https://travis-ci.org/shootingfans/socket.svg?branch=main)](https://travis-ci.org/shootingfans/socket)
+[![Coverage Status](https://coveralls.io/repos/github/shootingfans/socket/badge.svg?branch=main)](https://coveralls.io/github/shootingfans/socket?branch=main)
+[![codecov](https://codecov.io/gh/shootingfans/socket/branch/main/graph/badge.svg)](https://codecov.io/gh/shootingfans/socket)
 
 ## 设计理念
 
