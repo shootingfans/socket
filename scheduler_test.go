@@ -266,7 +266,9 @@ func TestScheduler_Store(t *testing.T) {
 		fields fields
 		args   args
 	}{
-		// TODO: Add test cases.
+		{"test store", fields{
+			values: make(map[interface{}]interface{}),
+		}, args{"test1", "test111"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
