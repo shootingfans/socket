@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+// Connection
+// 连接，这是一个针对net.Conn的包装，主要用于实现总读写字节的存储，连接时间的存储
+// Connection is warp net.Conn
+// record sum read bytes write bytes created time and closed time
 type Connection struct {
 	net.Conn
 	rBytes uint64
@@ -14,6 +18,9 @@ type Connection struct {
 	enesc  int64
 }
 
+// Read
+// Read bytes from net.Conn and record read bytes
+// 从net.Conn中读取数据并记录读取的字节数
 func (c *Connection) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
 	if n > 0 {
