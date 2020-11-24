@@ -58,7 +58,7 @@ func ExampleNewProcessor() {
 			log.Println("accept conn failed: " + err.Error())
 			continue
 		}
-		process, err := socket.NewProcessor(
+		process, err := socket.NewAsyncProcessor(
 			context.Background(),
 			conn,
 			new(ExampleHandler),

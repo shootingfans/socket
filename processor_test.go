@@ -67,10 +67,10 @@ func (t *testHandler) OnWork(b []byte, scheduler *Scheduler) {
 	}
 }
 
-func TestProcessor(t *testing.T) {
+func TestAsyncProcessor(t *testing.T) {
 	srv, err := net.Listen("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	_, err = NewProcessor(nil, nil, nil, 0)
+	_, err = NewAsyncProcessor(nil, nil, nil, 0)
 	assert.Equal(t, err, ErrNilConnection)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -86,18 +86,18 @@ func TestProcessor(t *testing.T) {
 			default:
 				conn1, err := srv.Accept()
 				if err == nil {
-					_, err = NewProcessor(nil, conn1, nil, 0)
+					_, err = NewAsyncProcessor(nil, conn1, nil, 0)
 					assert.Equal(t, err, ErrNilHandler)
-					psr1, err := NewProcessor(ctx, conn1, &testHandler{ass: t, isClient: false}, 0)
+					psr1, err := NewAsyncProcessor(ctx, conn1, &testHandler{ass: t, isClient: false}, 0)
 					assert.Nil(t, err)
 					assert.Equal(t, psr1.workNum, defaultWorkNum)
 					assert.Equal(t, cap(psr1.workChan), defaultWorkChanCap)
-					assert.Equal(t, cap(psr1.Scheduler.WriteChan), defaultWriteChanCap)
+					assert.Equal(t, cap(psr1.scheduler.WriteChan), defaultWriteChanCap)
 					wg.Add(1)
 					go func() {
 						defer wg.Done()
 						psr1.Process()
-						t.Log(psr1.Scheduler.Conn.ReadBytes(), psr1.Scheduler.Conn.WriteBytes())
+						t.Log(psr1.scheduler.Conn.ReadBytes(), psr1.Scheduler().Conn.WriteBytes())
 					}()
 				}
 			}
@@ -106,7 +106,7 @@ func TestProcessor(t *testing.T) {
 	<-time.After(time.Millisecond * 500)
 	conn2, err := net.Dial("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	psr2, err := NewProcessor(ctx, conn2, &testHandler{ass: t, isClient: true, panic: 0xfe}, 1)
+	psr2, err := NewAsyncProcessor(ctx, conn2, &testHandler{ass: t, isClient: true, panic: 0xfe}, 1)
 	assert.Nil(t, err)
 	go func() {
 		defer wg.Done()
@@ -114,7 +114,7 @@ func TestProcessor(t *testing.T) {
 	}()
 	conn3, err := net.Dial("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	psr3, err := NewProcessor(ctx, conn3, &testHandler{ass: t, isClient: true, panic: 0xff}, 1)
+	psr3, err := NewAsyncProcessor(ctx, conn3, &testHandler{ass: t, isClient: true, panic: 0xff}, 1)
 	assert.Nil(t, err)
 	go func() {
 		defer wg.Done()
@@ -126,7 +126,7 @@ func TestProcessor(t *testing.T) {
 	}()
 	conn4, err := net.Dial("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	psr4, err := NewProcessor(ctx, conn4, &testHandler{ass: t, isClient: true, panic: 0x00}, 1)
+	psr4, err := NewAsyncProcessor(ctx, conn4, &testHandler{ass: t, isClient: true, panic: 0x00}, 1)
 	assert.Nil(t, err)
 	go func() {
 		defer wg.Done()
@@ -147,5 +147,82 @@ func TestProcessor(t *testing.T) {
 		cancel()
 	}()
 	wg.Wait()
-	t.Log(psr2.Scheduler.Conn.ReadBytes(), psr2.Scheduler.Conn.WriteBytes())
+	t.Log(psr2.Scheduler().Conn.ReadBytes(), psr2.scheduler.Conn.WriteBytes())
+}
+
+func TestSyncProcessor(t *testing.T) {
+	_, err := NewSyncProcessor(nil, nil, nil)
+	assert.Equal(t, err, ErrNilConnection)
+	con1, con2 := net.Pipe()
+	_, err = NewSyncProcessor(nil, con1, nil)
+	assert.Equal(t, err, ErrNilHandler)
+	ctx, cancel := context.WithCancel(context.TODO())
+	psr1, _ := NewSyncProcessor(ctx, con1, &testHandler{
+		ass:      t,
+		isClient: true,
+		panic:    0x00,
+	})
+	assert.EqualValues(t, psr1.Scheduler().Conn.Conn, con1)
+	psr2, _ := NewSyncProcessor(ctx, con2, &testHandler{
+		ass:      t,
+		isClient: false,
+		panic:    0x00,
+	})
+	con3, con4 := net.Pipe()
+	psr3, _ := NewSyncProcessor(ctx, con3, &testHandler{
+		ass:      t,
+		isClient: false,
+		panic:    0x00,
+	})
+	psr4, _ := NewSyncProcessor(ctx, con4, &testHandler{
+		ass:      t,
+		isClient: true,
+		panic:    0xff,
+	})
+	con5, con6 := net.Pipe()
+	psr5, _ := NewSyncProcessor(ctx, con5, &testHandler{
+		ass:      t,
+		isClient: false,
+		panic:    0,
+	})
+	psr6, _ := NewSyncProcessor(ctx, con6, &testHandler{
+		ass:      t,
+		isClient: true,
+		panic:    0xfe,
+	})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		psr1.Process()
+	}()
+	go func() {
+		defer wg.Done()
+		psr2.Process()
+	}()
+	time.Sleep(time.Second)
+	psr1.Close()
+	psr2.Close()
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		psr3.Process()
+	}()
+	go func() {
+		defer wg.Done()
+		psr4.Process()
+	}()
+	time.Sleep(time.Second)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		psr5.Process()
+	}()
+	go func() {
+		defer wg.Done()
+		psr6.Process()
+	}()
+	time.Sleep(time.Second)
+	cancel()
+	wg.Wait()
 }

@@ -9,6 +9,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"time"
 )
 
 var (
@@ -22,12 +23,18 @@ var (
 	ErrNilHandler    = errors.New("handler is nil")
 )
 
-type Processor struct {
+type Processor interface {
+	Process() error
+	Close() error
+	Scheduler() *Scheduler
+}
+
+type AsyncProcessor struct {
 	handler   WorkHandler
 	ctx       context.Context
 	cancel    context.CancelFunc
 	workChan  chan []byte
-	Scheduler *Scheduler
+	scheduler *Scheduler
 	workNum   int
 	writeChan chan []byte
 
@@ -35,11 +42,15 @@ type Processor struct {
 	errChan chan error
 }
 
-func (psr *Processor) Process() error {
+func (psr *AsyncProcessor) Scheduler() *Scheduler {
+	return psr.scheduler
+}
+
+func (psr *AsyncProcessor) Process() error {
 	psr.errChan = make(chan error, 2+psr.workNum)
 	psr.wg.Add(2 + psr.workNum)
 	if hdl, ok := psr.handler.(ConnectedHandler); ok {
-		hdl.OnConnected(psr.Scheduler)
+		hdl.OnConnected(psr.scheduler)
 	}
 	go readProcess(psr)
 	go writeProcess(psr)
@@ -53,16 +64,16 @@ func (psr *Processor) Process() error {
 	default:
 	}
 	if hdl, ok := psr.handler.(ClosedHandler); ok {
-		hdl.OnClosed(psr.Scheduler, err)
+		hdl.OnClosed(psr.scheduler, err)
 	}
 	return err
 }
 
-func readProcess(processor *Processor) {
+func readProcess(processor *AsyncProcessor) {
 	defer processor.wg.Done()
 	defer close(processor.workChan)
 	buf := make([]byte, defaultBufferSize)
-	reader := bufio.NewReaderSize(processor.Scheduler.Conn, defaultBufferSize)
+	reader := bufio.NewReaderSize(processor.scheduler.Conn, defaultBufferSize)
 	for {
 		select {
 		case <-processor.ctx.Done():
@@ -76,7 +87,7 @@ func readProcess(processor *Processor) {
 				if err != io.EOF {
 					processor.errChan <- err
 					if hdl, ok := processor.handler.(ErrorHandler); ok {
-						hdl.OnReadError(processor.Scheduler, err)
+						hdl.OnReadError(processor.scheduler, err)
 					}
 				}
 				return
@@ -85,18 +96,18 @@ func readProcess(processor *Processor) {
 	}
 }
 
-func writeProcess(processor *Processor) {
-	defer processor.Scheduler.Conn.Close()
+func writeProcess(processor *AsyncProcessor) {
+	defer processor.scheduler.Conn.Close()
 	defer processor.wg.Done()
 	defer processor.cancel()
 	for by := range processor.writeChan {
-		cnt, err := processor.Scheduler.Conn.Write(by)
+		cnt, err := processor.scheduler.Conn.Write(by)
 		if hdl, ok := processor.handler.(FinishHandler); ok {
-			hdl.OnWrite(processor.Scheduler, by, cnt)
+			hdl.OnWrite(processor.scheduler, by, cnt)
 		}
 		if err != nil {
 			if hdl, ok := processor.handler.(ErrorHandler); ok {
-				hdl.OnWriteError(processor.Scheduler, by, err)
+				hdl.OnWriteError(processor.scheduler, by, err)
 			}
 			if err == io.EOF {
 				return
@@ -105,7 +116,7 @@ func writeProcess(processor *Processor) {
 	}
 }
 
-func workProcess(processor *Processor) {
+func workProcess(processor *AsyncProcessor) {
 	defer processor.wg.Done()
 	defer close(processor.writeChan)
 	defer func() {
@@ -130,28 +141,28 @@ func workProcess(processor *Processor) {
 					if !ok {
 						break clean
 					}
-					processor.handler.OnWork(by, processor.Scheduler)
+					processor.handler.OnWork(by, processor.scheduler)
 				default:
 					break clean
 				}
 			}
-			processor.Scheduler.Conn.Close()
+			processor.scheduler.Conn.Close()
 			return
 		case by, ok := <-processor.workChan:
 			if !ok {
 				return
 			}
-			processor.handler.OnWork(by, processor.Scheduler)
+			processor.handler.OnWork(by, processor.scheduler)
 		}
 	}
 }
 
-func (psr *Processor) Close() error {
+func (psr *AsyncProcessor) Close() error {
 	psr.cancel()
 	return nil
 }
 
-func NewProcessor(ctx context.Context, conn net.Conn, handler WorkHandler, workNum int) (*Processor, error) {
+func NewAsyncProcessor(ctx context.Context, conn net.Conn, handler WorkHandler, workNum int) (*AsyncProcessor, error) {
 	if ctx == nil {
 		ctx = context.TODO()
 	}
@@ -166,13 +177,119 @@ func NewProcessor(ctx context.Context, conn net.Conn, handler WorkHandler, workN
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	writeChan := make(chan []byte, defaultWriteChanCap)
-	return &Processor{
+	return &AsyncProcessor{
 		handler:   handler,
 		ctx:       ctx,
 		cancel:    cancel,
 		workChan:  make(chan []byte, defaultWorkChanCap),
 		workNum:   workNum,
 		writeChan: writeChan,
-		Scheduler: NewScheduler(ctx, NewConnection(conn), writeChan),
+		scheduler: NewScheduler(ctx, NewConnection(conn), writeChan),
+	}, nil
+}
+
+type SyncProcessor struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	scheduler *Scheduler
+	handler   WorkHandler
+	writeChan chan []byte
+}
+
+func (psr *SyncProcessor) Process() (processErr error) {
+	defer func() {
+		if err := recover(); err != nil {
+			if err, ok := err.(error); ok {
+				by := make([]byte, 4096)
+				cnt := runtime.Stack(by, true)
+				processErr = fmt.Errorf("%w\nstrack\n%s", err, string(by[0:cnt]))
+			} else {
+				processErr = fmt.Errorf("panic: %v", err)
+			}
+		}
+	}()
+	if hdl, ok := psr.handler.(ConnectedHandler); ok {
+		hdl.OnConnected(psr.scheduler)
+	}
+	for {
+		select {
+		case <-psr.ctx.Done():
+			if hdl, ok := psr.handler.(ClosedHandler); ok {
+				hdl.OnClosed(psr.scheduler, nil)
+			}
+			return nil
+		case by, ok := <-psr.writeChan:
+			if !ok {
+				if hdl, ok := psr.handler.(ClosedHandler); ok {
+					hdl.OnClosed(psr.scheduler, nil)
+				}
+				return nil
+			}
+			psr.scheduler.Conn.SetWriteDeadline(time.Now().Add(time.Second))
+			cnt, err := psr.scheduler.Conn.Write(by)
+			if hdl, ok := psr.handler.(FinishHandler); ok {
+				hdl.OnWrite(psr.scheduler, by, cnt)
+			}
+			if err != nil {
+				if hdl, ok := psr.handler.(ErrorHandler); ok {
+					hdl.OnWriteError(psr.scheduler, by, err)
+				}
+				if err == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("write bytes failed: %w", err)
+			}
+		default:
+			by := make([]byte, 1024)
+			psr.scheduler.Conn.SetDeadline(time.Now().Add(time.Second))
+			cnt, err := psr.scheduler.Conn.Read(by)
+			if cnt > 0 {
+				psr.handler.OnWork(by[0:cnt], psr.scheduler)
+			}
+			if err != nil {
+				if err, ok := err.(*net.OpError); ok {
+					if err.Timeout() || err.Temporary() {
+						continue
+					}
+				}
+				if hdl, ok := psr.handler.(ErrorHandler); ok {
+					hdl.OnReadError(psr.scheduler, err)
+				}
+				if err == io.EOF {
+					return nil
+				}
+				return fmt.Errorf("read bytes failed: %w", err)
+			}
+		}
+	}
+}
+
+func (psr *SyncProcessor) Close() error {
+	psr.cancel()
+	return nil
+}
+
+func (psr *SyncProcessor) Scheduler() *Scheduler {
+	return psr.scheduler
+}
+
+func NewSyncProcessor(ctx context.Context, conn net.Conn, handler WorkHandler) (*SyncProcessor, error) {
+	if ctx == nil {
+		ctx = context.TODO()
+	}
+	if conn == nil {
+		return nil, ErrNilConnection
+	}
+	if handler == nil {
+		return nil, ErrNilHandler
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	writeChan := make(chan []byte, defaultWriteChanCap)
+	return &SyncProcessor{
+		ctx:       ctx,
+		cancel:    cancel,
+		writeChan: writeChan,
+		scheduler: NewScheduler(ctx, NewConnection(conn), writeChan),
+		handler:   handler,
 	}, nil
 }
