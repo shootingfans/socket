@@ -73,11 +73,7 @@ func (psr *AsyncProcessor) Process() error {
 
 func readProcess(processor *AsyncProcessor) {
 	defer processor.wg.Done()
-	defer func() {
-		if atomic.CompareAndSwapUint32(&processor.closed, 0, 1) {
-			close(processor.workChan)
-		}
-	}()
+	defer close(processor.workChan)
 	buf := make([]byte, defaultBufferSize)
 	reader := bufio.NewReaderSize(processor.scheduler.Conn, defaultBufferSize)
 	for {
@@ -124,7 +120,11 @@ func writeProcess(processor *AsyncProcessor) {
 
 func workProcess(processor *AsyncProcessor) {
 	defer processor.wg.Done()
-	defer close(processor.writeChan)
+	defer func() {
+		if atomic.CompareAndSwapUint32(&processor.closed, 0, 1) {
+			close(processor.writeChan)
+		}
+	}()
 	defer func() {
 		if err := recover(); err != nil {
 			if err, ok := err.(error); ok {

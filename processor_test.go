@@ -70,7 +70,7 @@ func (t *testHandler) OnWork(b []byte, scheduler *Scheduler) {
 func TestAsyncProcessor(t *testing.T) {
 	srv, err := net.Listen("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	_, err = NewAsyncProcessor(nil, nil, nil, 0)
+	_, err = NewAsyncProcessor(nil, nil, nil, 2)
 	assert.Equal(t, err, ErrNilConnection)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
