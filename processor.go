@@ -9,6 +9,7 @@ import (
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,6 +37,7 @@ type AsyncProcessor struct {
 	workChan  chan []byte
 	scheduler *Scheduler
 	workNum   int
+	closed    uint32
 	writeChan chan []byte
 
 	wg      sync.WaitGroup
@@ -71,7 +73,11 @@ func (psr *AsyncProcessor) Process() error {
 
 func readProcess(processor *AsyncProcessor) {
 	defer processor.wg.Done()
-	defer close(processor.workChan)
+	defer func() {
+		if atomic.CompareAndSwapUint32(&processor.closed, 0, 1) {
+			close(processor.workChan)
+		}
+	}()
 	buf := make([]byte, defaultBufferSize)
 	reader := bufio.NewReaderSize(processor.scheduler.Conn, defaultBufferSize)
 	for {
