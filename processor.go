@@ -18,6 +18,7 @@ var (
 	defaultWorkChanCap  = 20   // 默认工作通道的容量
 	defaultWriteChanCap = 20   // 默认写入通道的容量
 	defaultWorkNum      = 1    // 默认工作协程数量
+	DefaultStackCap     = 4096 // 默认异常时打印的栈大小
 )
 var (
 	ErrNilConnection = errors.New("conn is nil")
@@ -128,7 +129,7 @@ func workProcess(processor *AsyncProcessor) {
 	defer func() {
 		if err := recover(); err != nil {
 			if err, ok := err.(error); ok {
-				by := make([]byte, 4096)
+				by := make([]byte, DefaultStackCap)
 				cnt := runtime.Stack(by, true)
 				processor.errChan <- fmt.Errorf("%w\nstrack\n%s", err, string(by[0:cnt]))
 			} else {
