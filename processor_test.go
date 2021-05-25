@@ -106,8 +106,10 @@ func TestAsyncProcessor(t *testing.T) {
 	<-time.After(time.Millisecond * 500)
 	conn2, err := net.Dial("tcp", "127.0.0.1:29999")
 	assert.Nil(t, err)
-	psr2, err := NewAsyncProcessor(ctx, conn2, &testHandler{ass: t, isClient: true, panic: 0xfe}, 1)
+	hdl := &testHandler{ass: t, isClient: true, panic: 0xfe}
+	psr2, err := NewAsyncProcessor(ctx, conn2, hdl, 1)
 	assert.Nil(t, err)
+	assert.EqualValues(t, psr2.Handler(), hdl)
 	go func() {
 		defer wg.Done()
 		psr2.Process()
