@@ -28,6 +28,7 @@ var (
 type Processor interface {
 	Process() error
 	Close() error
+	Handler() WorkHandler
 	Scheduler() *Scheduler
 }
 
@@ -169,6 +170,10 @@ func (psr *AsyncProcessor) Close() error {
 	return nil
 }
 
+func (psr *AsyncProcessor) Handler() WorkHandler {
+	return psr.handler
+}
+
 func NewAsyncProcessor(ctx context.Context, conn net.Conn, handler WorkHandler, workNum int) (*AsyncProcessor, error) {
 	if ctx == nil {
 		ctx = context.TODO()
@@ -274,6 +279,10 @@ func (psr *SyncProcessor) Process() (processErr error) {
 func (psr *SyncProcessor) Close() error {
 	psr.cancel()
 	return nil
+}
+
+func (psr *SyncProcessor) Handler() WorkHandler {
+	return psr.handler
 }
 
 func (psr *SyncProcessor) Scheduler() *Scheduler {
